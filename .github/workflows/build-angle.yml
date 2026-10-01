@@ -101,7 +101,6 @@ jobs:
           target_os = "android"
           target_cpu = "x64"
           is_component_build = false
-          is_official_build = true
           is_debug = false
           angle_enable_vulkan = true
           angle_assert_always_on = false
@@ -110,7 +109,7 @@ jobs:
           EOF
 
           gn gen out/Android
-          gn args --list out/Android | grep -E '^(target_os|target_cpu|is_component_build|is_official_build|is_debug|angle_enable_vulkan|angle_assert_always_on|use_thin_lto|thin_lto_enable_optimizations)' || true
+          gn args --list out/Android | grep -E '^(target_os|target_cpu|is_component_build|is_debug|angle_enable_vulkan|angle_assert_always_on|use_thin_lto|thin_lto_enable_optimizations)' || true
 
       - name: Build AngleLibraries.apk
         shell: bash
@@ -129,7 +128,7 @@ jobs:
             echo "ANGLE commit: $(git rev-parse HEAD)"
             echo "Build target: Android x86_64"
             echo "Backend: Vulkan enabled"
-            echo "Build type: official/release"
+            echo "Build type: release (is_debug=false)"
             echo
             sha256sum out/Android/apks/AngleLibraries.apk
           } > "${{ github.workspace }}/artifact/build-info.txt"
