@@ -1,0 +1,147 @@
+name: Build ANGLE for MuMu
+
+on:
+  workflow_dispatch:
+    inputs:
+      angle_ref:
+        description: "ANGLE branch, tag, or commit"
+        required: true
+        default: "main"
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-angle.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Android x86_64 Release APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+
+    env:
+      DEPOT_TOOLS: ${{ github.workspace }}/depot_tools
+      ANGLE_WORK: ${{ github.workspace }}/angle-work
+
+    steps:
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "Before cleanup:"
+          df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo apt-get clean
+          echo "After cleanup:"
+          df -h /
+
+      - name: Install depot_tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS"
+          echo "$DEPOT_TOOLS" >> "$GITHUB_PATH"
+
+      - name: Fetch ANGLE source and Android dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$DEPOT_TOOLS:$PATH"
+          mkdir -p "$ANGLE_WORK"
+          cd "$ANGLE_WORK"
+
+          git clone https://chromium.googlesource.com/angle/angle.git angle
+
+          ANGLE_REF="${{ github.event.inputs.angle_ref || 'main' }}"
+          cd angle
+          git checkout "$ANGLE_REF"
+          cd ..
+
+          cat > .gclient <<'EOF'
+          solutions = [
+            {
+              "name": "angle",
+              "url": "https://chromium.googlesource.com/angle/angle.git",
+              "managed": False,
+              "custom_deps": {},
+              "custom_vars": {},
+            },
+          ]
+          target_os = ["android"]
+          EOF
+
+          gclient sync --no-history
+          df -h /
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$DEPOT_TOOLS:$PATH"
+          cd "$ANGLE_WORK/angle"
+          ./build/install-build-deps.sh --no-prompt
+          df -h /
+
+      - name: Generate optimized Android x86_64 build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$DEPOT_TOOLS:$PATH"
+          cd "$ANGLE_WORK/angle"
+
+          mkdir -p out/Android
+          cat > out/Android/args.gn <<'EOF'
+          target_os = "android"
+          target_cpu = "x64"
+          is_component_build = false
+          is_official_build = true
+          is_debug = false
+          angle_enable_vulkan = true
+          angle_assert_always_on = false
+          use_thin_lto = true
+          thin_lto_enable_optimizations = true
+          EOF
+
+          gn gen out/Android
+          gn args --list out/Android | grep -E '^(target_os|target_cpu|is_component_build|is_official_build|is_debug|angle_enable_vulkan|angle_assert_always_on|use_thin_lto|thin_lto_enable_optimizations)' || true
+
+      - name: Build AngleLibraries.apk
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$DEPOT_TOOLS:$PATH"
+          cd "$ANGLE_WORK/angle"
+          autoninja -C out/Android angle_apks
+
+          test -f out/Android/apks/AngleLibraries.apk
+          mkdir -p "${{ github.workspace }}/artifact"
+          cp out/Android/apks/AngleLibraries.apk "${{ github.workspace }}/artifact/AngleLibraries-x86_64.apk"
+
+          {
+            echo "ANGLE ref requested: ${{ github.event.inputs.angle_ref || 'main' }}"
+            echo "ANGLE commit: $(git rev-parse HEAD)"
+            echo "Build target: Android x86_64"
+            echo "Backend: Vulkan enabled"
+            echo "Build type: official/release"
+            echo
+            sha256sum out/Android/apks/AngleLibraries.apk
+          } > "${{ github.workspace }}/artifact/build-info.txt"
+
+          ls -lh "${{ github.workspace }}/artifact"
+          df -h /
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AngleLibraries-MuMu-x86_64
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
